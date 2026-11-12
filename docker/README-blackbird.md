@@ -36,4 +36,3 @@ docker run -d --name blackbird-valhalla -p 8002:8002 \
 已有非空瓦片文件或配置中的瓦片 tar 会直接复用，空目录不算可用瓦片。缺少瓦片和 PBF 时容器退出，不会报告健康。
 建图期间，挂载目录中保留 `.blackbird-building` 标记；失败或中断后重启会重新构建，完成后自动清除标记。不要手动清除未完成构建的标记。
 导航请求传入 `"language": "zh-CN"` 或 `"language": "zh"`。
-
