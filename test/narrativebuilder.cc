@@ -29,6 +29,9 @@ constexpr size_t CONSECUTIVE_COUNT = 2;
 // Sub class to test protected methods
 class NarrativeBuilderTest : public NarrativeBuilder {
 public:
+  using NarrativeBuilder::FormEnterBuildingInstruction;
+  using NarrativeBuilder::FormExitBuildingInstruction;
+
   NarrativeBuilderTest(const Options& options,
                        const NarrativeDictionary& dictionary,
                        const EnhancedTripLeg* trip_path = nullptr)
@@ -9129,6 +9132,38 @@ TEST(NarrativeBuilder, TestFormVerbalMultiCue) {
       nbt_mi, CreateVerbalMultiCueCurrentManeuver("Turn left onto North Plum Street.", true, 0.16f),
       CreateVerbalMultiCueNextManeuver("Turn right onto East Fulton Street."),
       "Turn left onto North Plum Street. Then, in 500 feet, Turn right onto East Fulton Street.");
+}
+
+TEST(NarrativeBuilder, ChineseVerbalMultiCue) {
+  for (const auto* language : {"zh", "zh-CN"}) {
+    SCOPED_TRACE(language);
+    Options options;
+    options.set_units(Options::kilometers);
+    options.set_language(language);
+    NarrativeBuilderTest builder(options, GetNarrativeDictionary(options));
+
+    TryFormVerbalMultiCue(builder, CreateVerbalMultiCueCurrentManeuver("左转，进入中山路。"),
+                          CreateVerbalMultiCueNextManeuver("右转，进入人民路。"),
+                          "左转，进入中山路。然后右转，进入人民路。");
+    TryFormVerbalMultiCue(builder,
+                          CreateVerbalMultiCueCurrentManeuver("左转，进入中山路。", true, 0.16f),
+                          CreateVerbalMultiCueNextManeuver("右转，进入人民路。"),
+                          "左转，进入中山路。然后在200 米后右转，进入人民路。");
+  }
+}
+
+TEST(NarrativeBuilder, ChineseIndoorInstructions) {
+  for (const auto* language : {"zh", "zh-CN"}) {
+    SCOPED_TRACE(language);
+    Options options;
+    options.set_language(language);
+    NarrativeBuilderTest builder(options, GetNarrativeDictionary(options));
+    Maneuver maneuver;
+    maneuver.set_travel_mode(TravelMode::kPedestrian);
+    maneuver.set_street_names({{"室内通道", false}});
+    EXPECT_EQ(builder.FormEnterBuildingInstruction(maneuver), "进入建筑，继续沿室内通道前进。");
+    EXPECT_EQ(builder.FormExitBuildingInstruction(maneuver), "离开建筑，继续沿室内通道前进。");
+  }
 }
 
 void TryFormVerbalAlertApproachInstruction(NarrativeBuilderTest& nbt,

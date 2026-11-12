@@ -20,7 +20,15 @@ def main():
     name = f"blackbird-smoke-{uuid.uuid4().hex[:12]}"
 
     def docker(*command):
-        return subprocess.run(["docker", *command], capture_output=True, text=True, check=True)
+        return subprocess.run(
+            ["docker", *command], capture_output=True, text=True, check=True, timeout=30
+        )
+
+    def expect_failed_start():
+        code = int(docker("wait", name).stdout.strip())
+        state = json.loads(docker("inspect", "--format", "{{json .State}}", name).stdout)
+        if code == 0 or state.get("Health", {}).get("Status") == "healthy":
+            raise AssertionError("An incomplete tileset was accepted as ready")
 
     def request(endpoint, payload=None):
         command = ["exec", name, "curl", "-fsS", "--max-time", "10"]
@@ -40,7 +48,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix="blackbird-smoke-") as workdir:
         data = Path(workdir)
         fixture = Path(__file__).resolve().parents[1] / "test/data/utrecht_netherlands.osm.pbf"
-        shutil.copyfile(fixture, data / "utrecht.osm.pbf")
+        empty_tile = data / "tiles/2/000/000.gph"
+        empty_tile.parent.mkdir(parents=True)
+        empty_tile.touch()
+        marker = data / ".blackbird-building"
         created = False
         try:
             docker(
@@ -50,16 +61,31 @@ def main():
                 name,
                 "--user",
                 f"{os.getuid()}:{os.getgid()}",
+                "--ulimit",
+                "core=0",
                 "--mount",
                 f"type=bind,src={data},dst=/custom_files",
                 "--env",
                 "TILE_BUILD_CONCURRENCY=2",
                 "--env",
                 "VALHALLA_CONCURRENCY=2",
+                "--health-interval=1s",
+                "--health-start-period=1s",
                 args.image,
             )
             created = True
+            expect_failed_start()
+            pbf = data / "utrecht.osm.pbf"
+            pbf.write_bytes(b"invalid OSM PBF")
+            docker("start", name)
+            expect_failed_start()
+            if not marker.exists():
+                raise AssertionError("Failed build did not retain its recovery marker")
+            shutil.copyfile(fixture, pbf)
+            docker("start", name)
             wait_for_service()
+            if marker.exists():
+                raise AssertionError("Successful build retained its recovery marker")
             version = docker("exec", name, "valhalla_service", "--version").stdout.strip()
             if not version.startswith(args.version_prefix):
                 raise AssertionError(f"Unexpected engine version: {version}")
@@ -68,19 +94,25 @@ def main():
                 {"lat": 52.11932621, "lon": 5.10742859},
             ]
             for language in ("zh", "zh-CN"):
-                route = request(
-                    "route", {"locations": locations, "costing": "auto", "language": language}
-                )
-                trip = route["trip"]
-                if trip["language"] not in ("zh", "zh-CN"):
-                    raise AssertionError(f"Chinese locale fell back to {trip['language']}")
-                maneuvers = trip["legs"][0]["maneuvers"]
-                text = " ".join(m["instruction"] for m in maneuvers)
-                verbal = " ".join(m.get("verbal_pre_transition_instruction", "") for m in maneuvers)
-                if not re.search(r"[\u4e00-\u9fff]", text) or not re.search(r"[\u4e00-\u9fff]", verbal):
-                    raise AssertionError("Chinese text or voice instructions are missing")
-                if re.search(r"<[A-Z][A-Z_0-9]*>", json.dumps(route, ensure_ascii=False)):
-                    raise AssertionError("Narrative contains an unresolved placeholder")
+                for costing in ("auto", "pedestrian"):
+                    route = request(
+                        "route", {"locations": locations, "costing": costing, "language": language}
+                    )
+                    trip = route["trip"]
+                    if trip["language"] not in ("zh", "zh-CN"):
+                        raise AssertionError(f"Chinese locale fell back to {trip['language']}")
+                    for maneuver in trip["legs"][0]["maneuvers"]:
+                        for key, text in maneuver.items():
+                            if "instruction" not in key or not text:
+                                continue
+                            if not re.search(r"[\u4e00-\u9fff]", text):
+                                raise AssertionError(f"Chinese instruction is missing: {text}")
+                            if re.search(r"[。！？][，。！？]", text):
+                                raise AssertionError(f"Duplicate narrative punctuation: {text}")
+                            if costing == "pedestrian" and "行驶" in text:
+                                raise AssertionError(f"Driving wording in pedestrian route: {text}")
+                    if re.search(r"<[A-Z][A-Z_0-9]*>", json.dumps(route, ensure_ascii=False)):
+                        raise AssertionError("Narrative contains an unresolved placeholder")
             matrix = request(
                 "sources_to_targets",
                 {"sources": locations[:1], "targets": locations[1:], "costing": "auto"},
@@ -107,7 +139,36 @@ def main():
                 str(p.relative_to(data)): p.stat().st_mtime_ns for p in (data / "tiles").rglob("*.gph")
             }:
                 raise AssertionError("Restart rebuilt existing graph tiles")
-            print(f"{version}: Chinese routes, voice, matrix, isochrone and restart passed")
+            docker("stop", name)
+            marker.touch()
+            docker("start", name)
+            wait_for_service()
+            if marker.exists():
+                raise AssertionError("Interrupted build was not recovered")
+            logs = docker("logs", name)
+            if (logs.stdout + logs.stderr).count("building tiles from ") != 3:
+                raise AssertionError("Interrupted build reused a potentially partial tileset")
+            docker("stop", name)
+            custom_tiles = data / "routing-tiles"
+            (data / "tiles").rename(custom_tiles)
+            configuration = json.loads(config.read_text())
+            configuration["mjolnir"]["tile_dir"] = "/custom_files/routing-tiles"
+            config.write_text(json.dumps(configuration))
+            docker("start", name)
+            wait_for_service()
+            request("route", {"locations": locations, "costing": "auto", "language": "zh-CN"})
+            logs = docker("logs", name)
+            if (logs.stdout + logs.stderr).count("building tiles from ") != 3:
+                raise AssertionError("Custom tile directory was not reused")
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                health = docker("inspect", "--format", "{{.State.Health.Status}}", name).stdout.strip()
+                if health == "healthy":
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError("Completed tileset did not become healthy")
+            print(f"{version}: Chinese routes, voice, recovery, matrix, isochrone and restart passed")
         except Exception:
             if created:
                 logs = docker("logs", "--tail", "100", name)

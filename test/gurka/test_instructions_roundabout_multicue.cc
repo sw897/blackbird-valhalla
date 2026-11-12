@@ -69,6 +69,21 @@ gurka::map InstructionsRoundaboutMulticue::map = {};
 
 /*************************************************************/
 
+TEST_F(InstructionsRoundaboutMulticue, ChineseRoundabout) {
+  for (const auto* language : {"zh", "zh-CN"}) {
+    SCOPED_TRACE(language);
+    const auto result = gurka::do_action(valhalla::Options::route, map, {"A", "D"}, "auto",
+                                         {{"/language", language}});
+    const auto& leg = result.directions().routes(0).legs(0);
+    EXPECT_EQ(leg.maneuver(1).text_instruction(), "进入环岛，从第一出口驶出，进入1st Avenue。");
+    EXPECT_EQ(leg.maneuver(1).verbal_pre_transition_instruction(),
+              "进入环岛，从第一出口驶出，进入1st Avenue。");
+    EXPECT_EQ(leg.maneuver(2).verbal_pre_transition_instruction(),
+              "驶出环岛，进入1st Avenue。然后即将到达目的地。");
+    EXPECT_EQ(leg.maneuver(2).verbal_post_transition_instruction(), "继续前进200 米。");
+  }
+}
+
 TEST_F(InstructionsRoundaboutMulticue, StartThenEnterRoundaboutMulticueOrdinalOnly) {
   auto result = gurka::do_action(valhalla::Options::route, map, {"A", "I"}, "auto");
   gurka::assert::raw::expect_maneuvers(result, {DirectionsLeg_Maneuver_Type_kStart,
