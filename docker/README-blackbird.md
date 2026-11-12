@@ -39,4 +39,4 @@ docker run -d --name blackbird-valhalla -p 8002:8002 \
 
 ## GitLab 归档
 
-`origin` 指向 GitHub fork，`upstream` 指向官方仓库。GitLab 仓库已存档，`highmap` 仅保留用于查询历史；后续变更只推送 GitHub。
+`origin` 指向 GitHub fork，`upstream` 指向官方仓库。GitLab 仓库已存档，后续变更只推送 GitHub。
