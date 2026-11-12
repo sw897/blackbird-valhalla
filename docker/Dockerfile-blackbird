@@ -63,6 +63,17 @@ RUN echo "$VERSION_MODIFIER" > /usr/local/valhalla_version && \
 #RUN strip /usr/local/lib/libvalhalla.a
 #RUN strip /usr/local/lib/python3.12/dist-packages/valhalla/_valhalla*.so
 
+FROM builder AS chinese-tests
+WORKDIR /src/valhalla
+COPY test/ test/
+RUN cmake -S . -B build -DENABLE_TESTS=ON && \
+  cmake --build build --parallel ${CONCURRENCY:-4} --target \
+    narrative_dictionary narrativebuilder gurka_route_with_narrative_languages gurka_instructions_roundabout_multicue localedef && \
+  cd build && export LOCPATH=/src/valhalla/locales && \
+  ./test/narrative_dictionary && ./test/narrativebuilder && \
+  ./test/gurka/gurka_route_with_narrative_languages && ./test/gurka/gurka_instructions_roundabout_multicue && \
+  touch /usr/local/src/blackbird-tests-passed
+
 ###################################################################
 # copy the important stuff from the build stage to the runner image
 FROM ubuntu:24.04 AS runner
@@ -88,6 +99,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && apt update && \
 # grab the builder stages artifacts
 COPY --from=builder /usr/local /usr/local
 COPY --from=builder /usr/local/lib/python3.12/dist-packages/valhalla /usr/local/lib/python3.12/dist-packages/valhalla/
+# Keep the runtime image dependent on the test stage.
+COPY --from=chinese-tests /usr/local/src/blackbird-tests-passed /usr/local/src/blackbird-tests-passed
 
 RUN cat /usr/local/src/valhalla_locales | xargs -d '\n' -n1 locale-gen
 
@@ -103,6 +116,6 @@ RUN chmod +x /usr/local/bin/blackbird-entrypoint.sh
 
 EXPOSE 8002
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 --start-period=10s \
-  CMD curl -fsS http://localhost:8002/status || exit 1
+  CMD test -f /tmp/blackbird-ready && curl -fsS http://localhost:8002/status || exit 1
 
 ENTRYPOINT ["/usr/local/bin/blackbird-entrypoint.sh"]

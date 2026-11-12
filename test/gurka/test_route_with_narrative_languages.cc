@@ -165,3 +165,17 @@ TEST_F(RouteWithNarrativeLanguages, ChineseLeftTurn) {
     EXPECT_EQ(leg.maneuver(2).text_instruction(), "已到达目的地。");
   }
 }
+
+TEST_F(RouteWithNarrativeLanguages, ChinesePedestrian) {
+  for (const auto* language : {"zh", "zh-CN"}) {
+    SCOPED_TRACE(language);
+    const auto result = gurka::do_action(valhalla::Options::route, map, {"A", "D"}, "pedestrian",
+                                         {{"/language", language}});
+    const auto& leg = result.directions().routes(0).legs(0);
+    EXPECT_EQ(leg.maneuver(0).text_instruction(), "步行向东行进，沿Second Avenue行进。");
+    EXPECT_EQ(leg.maneuver(0).verbal_post_transition_instruction(), "继续前进400 米。");
+    EXPECT_EQ(leg.maneuver(1).text_instruction(), "左转，进入Main Street。");
+    EXPECT_EQ(leg.maneuver(1).verbal_post_transition_instruction(), "继续前进400 米。");
+    EXPECT_EQ(leg.maneuver(2).text_instruction(), "已到达目的地。");
+  }
+}
