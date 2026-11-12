@@ -117,6 +117,8 @@ const std::vector<std::pair<std::string, std::string>> RouteWithNarrativeLanguag
     {"uk-UA", "Поверніть праворуч на Main Street."},
     {"vi", "Rẽ phải vào Main Street."},
     {"vi-VN", "Rẽ phải vào Main Street."},
+    {"zh", "右转，进入Main Street。"},
+    {"zh-CN", "右转，进入Main Street。"},
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -147,5 +149,19 @@ TEST_F(RouteWithNarrativeLanguages, CheckRightTurnPerLanguage) {
     EXPECT_EQ(result.directions().routes(0).legs(0).maneuver(maneuver_index).text_instruction(),
               expected_lang_phrase.second)
         << ">>LANG_TAG=" << expected_lang_phrase.first;
+  }
+}
+
+TEST_F(RouteWithNarrativeLanguages, ChineseLeftTurn) {
+  for (const auto* language : {"zh", "zh-CN"}) {
+    SCOPED_TRACE(language);
+    const auto result = gurka::do_action(valhalla::Options::route, map, {"A", "D"}, "auto",
+                                         {{"/language", language}});
+    gurka::assert::raw::expect_path(result, {"Second Avenue", "Main Street"});
+
+    const auto& leg = result.directions().routes(0).legs(0);
+    EXPECT_EQ(leg.maneuver(1).text_instruction(), "左转，进入Main Street。");
+    EXPECT_EQ(leg.maneuver(1).verbal_transition_alert_instruction(), "左转，进入Main Street。");
+    EXPECT_EQ(leg.maneuver(2).text_instruction(), "已到达目的地。");
   }
 }
