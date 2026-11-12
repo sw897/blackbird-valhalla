@@ -37,11 +37,6 @@ docker run -d --name blackbird-valhalla -p 8002:8002 \
 建图期间，挂载目录中保留 `.blackbird-building` 标记；失败或中断后重启会重新构建，完成后自动清除标记。不要手动清除未完成构建的标记。
 导航请求传入 `"language": "zh-CN"` 或 `"language": "zh"`。
 
-## GitLab 备份
+## GitLab 归档
 
-`origin` 指向 GitHub fork，`upstream` 指向官方仓库，`highmap` 保留现有 GitLab 仓库。
-发布相关提交同步至 `zh-CN` 后，更新 GitLab 备份：
-
-```bash
-git push highmap zh-CN
-```
+`origin` 指向 GitHub fork，`upstream` 指向官方仓库。GitLab 仓库已存档，`highmap` 仅保留用于查询历史；后续变更只推送 GitHub。
