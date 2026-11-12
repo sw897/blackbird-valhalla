@@ -1,0 +1,142 @@
+name: Publish Blackbird image
+run-name: "Blackbird zh-CN release #${{ github.run_number }}"
+
+on:
+  push:
+    branches: [zh-CN]
+    paths-ignore:
+      - '**.md'
+      - docs/**
+      - test_requests/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blackbird-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/sw897/blackbird-valhalla
+
+jobs:
+  prepare:
+    if: github.repository == 'sw897/blackbird-valhalla' && github.ref == 'refs/heads/zh-CN'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      modifier: ${{ steps.version.outputs.modifier }}
+      commit_tag: ${{ steps.version.outputs.commit_tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Determine release version
+        id: version
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          header = Path('valhalla/valhalla.h').read_text()
+          engine = '.'.join(re.search(rf'^#define VALHALLA_VERSION_{part} (\d+)$', header, re.M)[1]
+                            for part in ('MAJOR', 'MINOR', 'PATCH'))
+          modifier = f'zh.{os.environ["GITHUB_RUN_NUMBER"]}'
+          version = f'{engine}-{modifier}'
+          commit_tag = f'{version}-sha-{os.environ["GITHUB_SHA"][:12]}'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nmodifier={modifier}\ncommit_tag={commit_tag}\n')
+          print(f'Publishing {version} and {commit_tag}')
+          PY
+      - name: Validate Chinese locale
+        run: |
+          python3 locales/po_tools.py lint zh-CN --strict
+          python3 locales/po_tools.py po2json zh-CN --out "$RUNNER_TEMP/locales"
+          cmp locales/zh-CN.json "$RUNNER_TEMP/locales/zh-CN.json"
+
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build native image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile-blackbird
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.title=Blackbird Valhalla with Chinese narratives
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+          build-args: |
+            CONCURRENCY=4
+            VERSION_MODIFIER=${{ needs.prepare.outputs.modifier }}
+          cache-from: type=gha,scope=blackbird-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=blackbird-${{ matrix.arch }}
+      - name: Check Blackbird startup and Chinese API responses
+        env:
+          IMAGE_TAG: ${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: python3 docker/test_blackbird.py "$IMAGE:$IMAGE_TAG" --version-prefix "$VERSION"
+      - name: Publish architecture image
+        env:
+          IMAGE_TAG: ${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
+        run: docker push "$IMAGE:$IMAGE_TAG"
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish and verify multi-platform image
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          COMMIT_TAG: ${{ needs.prepare.outputs.commit_tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:$COMMIT_TAG" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
+            --annotation "index:org.opencontainers.image.version=$VERSION" \
+            "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          docker buildx imagetools inspect --raw "$IMAGE:$VERSION" \
+            | jq -e '[.manifests[].platform | .os + "/" + .architecture] | sort == ["linux/amd64", "linux/arm64"]'
+          printf 'Published %s:%s and %s:%s for amd64 and arm64.\n' \
+            "$IMAGE" "$VERSION" "$IMAGE" "$COMMIT_TAG" >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"

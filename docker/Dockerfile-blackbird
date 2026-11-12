@@ -74,7 +74,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-g
 
 # github packaging niceties
 LABEL org.opencontainers.image.description="Open Source Routing Engine for OpenStreetMap and Other Datasources"
-LABEL org.opencontainers.image.source="https://github.com/valhalla/valhalla"
+LABEL org.opencontainers.image.source="https://github.com/sw897/blackbird-valhalla"
 
 # we need to add back some runtime dependencies for binaries and scripts
 # install all the posix locales that we support
